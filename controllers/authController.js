@@ -1,13 +1,11 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/User");
+const bcrypt = require("bcryptjs");
+const prisma = require("../config/prisma");
 
-function generateToken(userId) {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  });
-}
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
+};
 
-// POST /api/auth/register
 async function register(req, res) {
   try {
     const { name, email, password } = req.body;
@@ -16,25 +14,32 @@ async function register(req, res) {
       return res.status(400).json({ message: "Name, email and password are required" });
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
+    const userExists = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (userExists) {
       return res.status(409).json({ message: "An account with this email already exists" });
     }
 
-    // Password gets hashed automatically by the pre-save hook on the model
-    const user = await User.create({ name, email, password });
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
-    const token = generateToken(user._id);
+    const user = await prisma.user.create({
+      data: {
+        name,
+        email: email.toLowerCase(),
+        password: hashedPassword,
+      },
+    });
+
+    const token = generateToken(user.id);
     res.status(201).json({
       token,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role },
+      user: { id: user.id, _id: user.id, name: user.name, email: user.email, role: user.role },
     });
-  } catch (err) {
-    res.status(500).json({ message: "Registration failed", error: err.message });
+  } catch (error) {
+    res.status(500).json({ message: "Server error during registration", error: error.message });
   }
 }
 
-// POST /api/auth/login
 async function login(req, res) {
   try {
     const { email, password } = req.body;
@@ -42,24 +47,40 @@ async function login(req, res) {
       return res.status(400).json({ message: "Email and password are required" });
     }
 
-    // .select("+password") because the schema hides password by default
-    const user = await User.findOne({ email }).select("+password");
+    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
-    // Deliberately vague error message - don't reveal whether the email
-    // exists or the password was wrong. That's a security best practice
-    // (prevents attackers from enumerating valid emails).
-    if (!user || !(await user.comparePassword(password))) {
+    if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
 
-    const token = generateToken(user._id);
+    const token = generateToken(user.id);
     res.json({
       token,
-      user: { id: user._id, name: user.name, email: user.email, role: user.role },
+      user: { id: user.id, _id: user.id, name: user.name, email: user.email, role: user.role },
     });
-  } catch (err) {
-    res.status(500).json({ message: "Login failed", error: err.message });
+  } catch (error) {
+    res.status(500).json({ message: "Server error during login", error: error.message });
   }
 }
 
-module.exports = { register, login };
+async function getProfile(req, res) {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, name: true, email: true, role: true }
+    });
+    
+    if (user) {
+      res.json({
+        ...user,
+        _id: user.id // frontend compatibility
+      });
+    } else {
+      res.status(404).json({ message: "User not found" });
+    }
+  } catch (error) {
+    res.status(500).json({ message: "Server error fetching profile", error: error.message });
+  }
+}
+
+module.exports = { register, login, getProfile };

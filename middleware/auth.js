@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/User");
+const prisma = require("../config/prisma");
 
 // Runs before any route that needs a logged-in user.
 // Expects header: Authorization: Bearer <token>
@@ -16,9 +16,11 @@ async function protect(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // Attach the user (minus password) to the request so later handlers
-    // know who's making the request.
-    req.user = await User.findById(decoded.id);
+    // Attach the user (minus password) to the request
+    req.user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: { id: true, name: true, email: true, role: true, createdAt: true, updatedAt: true }
+    });
     if (!req.user) {
       return res.status(401).json({ message: "User no longer exists" });
     }

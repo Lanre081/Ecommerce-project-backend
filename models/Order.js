@@ -1,9 +1,5 @@
 const mongoose = require("mongoose");
 
-// A subdocument schema for each line item in an order.
-// Note we store `priceAtPurchase` rather than just referencing the product's
-// current price - if the product price changes later, past orders must not
-// silently change too. This is a common beginner mistake worth avoiding.
 const orderItemSchema = new mongoose.Schema(
   {
     product: {
@@ -12,8 +8,10 @@ const orderItemSchema = new mongoose.Schema(
       required: true,
     },
     name: { type: String, required: true },
+    image: { type: String },
     quantity: { type: Number, required: true, min: 1 },
     priceAtPurchase: { type: Number, required: true },
+    variant: { type: String }, // e.g., "Size: M, Color: Red"
   },
   { _id: false }
 );
@@ -31,11 +29,40 @@ const orderSchema = new mongoose.Schema(
       validate: [(arr) => arr.length > 0, "Order must contain at least one item"],
     },
     shippingAddress: {
-      street: String,
-      city: String,
-      state: String,
-      postalCode: String,
-      country: String,
+      fullName: { type: String, required: true },
+      street: { type: String, required: true },
+      landmark: { type: String },
+      city: { type: String, required: true },
+      state: { type: String, required: true },
+      postalCode: { type: String },
+      country: { type: String, required: true, default: "Nigeria" },
+      phone: { type: String, required: true },
+      deliveryNotes: { type: String },
+    },
+    paymentMethod: {
+      type: String,
+      required: true,
+      default: "Cash on Delivery",
+    },
+    paymentStatus: {
+      type: String,
+      enum: ["pending", "completed", "failed"],
+      default: "pending",
+    },
+    itemsPrice: {
+      type: Number,
+      required: true,
+      default: 0.0,
+    },
+    taxPrice: {
+      type: Number,
+      required: true,
+      default: 0.0,
+    },
+    shippingPrice: {
+      type: Number,
+      required: true,
+      default: 0.0,
     },
     totalAmount: {
       type: Number,
@@ -43,8 +70,31 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "processing", "shipped", "delivered", "cancelled"],
+      enum: ["pending", "processing", "shipped", "out_for_delivery", "delivered", "cancelled"],
       default: "pending",
+    },
+    orderTimeline: [
+      {
+        status: String,
+        date: { type: Date, default: Date.now },
+        description: String,
+      },
+    ],
+    isPaid: {
+      type: Boolean,
+      required: true,
+      default: false,
+    },
+    paidAt: {
+      type: Date,
+    },
+    isDelivered: {
+      type: Boolean,
+      required: true,
+      default: false,
+    },
+    deliveredAt: {
+      type: Date,
     },
   },
   { timestamps: true }

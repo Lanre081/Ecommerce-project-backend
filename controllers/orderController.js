@@ -1,80 +1,84 @@
-const mongoose = require("mongoose");
-const Order = require("../models/Order");
-const Product = require("../models/Product");
+const prisma = require("../config/prisma");
 
 // POST /api/orders  (protected - requires login)
-// Body: { items: [{ productId, quantity }], shippingAddress }
-//
-// IMPORTANT beginner lesson: never trust prices sent from the client.
-// A malicious user could edit the JS in devtools and send { price: 0 }.
-// We always re-fetch the real price from the database on the server.
 async function createOrder(req, res) {
-  const session = await mongoose.startSession();
   try {
-    const { items, shippingAddress } = req.body;
+    const { items, shippingAddress, paymentMethod, itemsPrice, taxPrice, shippingPrice, totalAmount } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ message: "Order must contain at least one item" });
     }
 
-    session.startTransaction();
+    // Prisma transaction
+    const order = await prisma.$transaction(async (tx) => {
+      let calculatedTotal = 0;
+      const orderItemsData = [];
 
-    const orderItems = [];
-    let totalAmount = 0;
+      for (const item of items) {
+        const product = await tx.product.findUnique({ where: { id: item.productId } });
 
-    for (const item of items) {
-      const product = await Product.findById(item.productId).session(session);
+        if (!product) {
+          throw new Error(`Product not found: ${item.productId}`);
+        }
+        if (product.stock < item.quantity) {
+          throw new Error(`Insufficient stock for "${product.name}" (only ${product.stock} left)`);
+        }
 
-      if (!product) {
-        throw new Error(`Product not found: ${item.productId}`);
+        await tx.product.update({
+          where: { id: product.id },
+          data: { stock: product.stock - item.quantity }
+        });
+
+        const lineTotal = product.price * item.quantity;
+        calculatedTotal += lineTotal;
+
+        orderItemsData.push({
+          productId: product.id,
+          name: product.name,
+          image: product.images && product.images.length > 0 ? product.images[0] : "",
+          quantity: item.quantity,
+          priceAtPurchase: product.price,
+          variant: item.variant || "",
+        });
       }
-      if (product.stock < item.quantity) {
-        throw new Error(`Insufficient stock for "${product.name}" (only ${product.stock} left)`);
-      }
 
-      // Deduct stock now, inside the transaction, so two customers can't
-      // both "buy" the last item at the same time.
-      product.stock -= item.quantity;
-      await product.save({ session });
+      const finalTotalAmount = calculatedTotal + (taxPrice || 0) + (shippingPrice || 0);
 
-      const lineTotal = product.price * item.quantity;
-      totalAmount += lineTotal;
-
-      orderItems.push({
-        product: product._id,
-        name: product.name,
-        quantity: item.quantity,
-        priceAtPurchase: product.price,
-      });
-    }
-
-    const order = await Order.create(
-      [
-        {
-          user: req.user._id,
-          items: orderItems,
-          shippingAddress,
-          totalAmount,
+      const createdOrder = await tx.order.create({
+        data: {
+          userId: req.user.id,
+          shippingAddress: shippingAddress,
+          paymentMethod: paymentMethod,
+          itemsPrice: calculatedTotal,
+          taxPrice: taxPrice || 0,
+          shippingPrice: shippingPrice || 0,
+          totalAmount: finalTotalAmount,
+          items: {
+            create: orderItemsData
+          }
         },
-      ],
-      { session }
-    );
+        include: { items: true }
+      });
 
-    await session.commitTransaction();
-    res.status(201).json(order[0]);
+      return createdOrder;
+    });
+
+    res.status(201).json({ ...order, _id: order.id });
   } catch (err) {
-    await session.abortTransaction();
     res.status(400).json({ message: err.message });
-  } finally {
-    session.endSession();
   }
 }
 
 // GET /api/orders/my  (protected - logged-in user's own orders)
 async function getMyOrders(req, res) {
   try {
-    const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
-    res.json(orders);
+    const orders = await prisma.order.findMany({
+      where: { userId: req.user.id },
+      orderBy: { createdAt: 'desc' },
+      include: { items: true }
+    });
+    const mapped = orders.map(o => ({ ...o, _id: o.id }));
+    res.json(mapped);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch orders", error: err.message });
   }
@@ -83,18 +87,98 @@ async function getMyOrders(req, res) {
 // GET /api/orders/:id  (protected - must be the order's owner, or an admin)
 async function getOrderById(req, res) {
   try {
-    const order = await Order.findById(req.params.id);
+    const order = await prisma.order.findUnique({
+      where: { id: req.params.id },
+      include: { 
+        user: { select: { id: true, name: true, email: true } },
+        items: true
+      }
+    });
+    
     if (!order) return res.status(404).json({ message: "Order not found" });
 
-    const isOwner = order.user.toString() === req.user._id.toString();
+    const isOwner = order.user.id === req.user.id;
     if (!isOwner && req.user.role !== "admin") {
       return res.status(403).json({ message: "Not authorized to view this order" });
     }
 
-    res.json(order);
+    res.json({ ...order, _id: order.id });
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch order", error: err.message });
   }
 }
 
-module.exports = { createOrder, getMyOrders, getOrderById };
+// GET /api/orders (admin only)
+async function getOrders(req, res) {
+  try {
+    const orders = await prisma.order.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        items: true,
+      },
+    });
+    res.json(orders.map(o => ({ ...o, _id: o.id })));
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch orders", error: error.message });
+  }
+}
+
+// PUT /api/orders/:id/status (admin only)
+async function updateOrderStatus(req, res) {
+  try {
+    const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    const dataToUpdate = {};
+    if (req.body.status) dataToUpdate.status = req.body.status;
+    if (req.body.paymentStatus) dataToUpdate.paymentStatus = req.body.paymentStatus;
+    
+    if (req.body.status === "delivered") {
+      dataToUpdate.isDelivered = true;
+      dataToUpdate.deliveredAt = new Date();
+    }
+    
+    if (req.body.paymentStatus === "completed") {
+      dataToUpdate.isPaid = true;
+      dataToUpdate.paidAt = new Date();
+    }
+
+    const updatedOrder = await prisma.order.update({
+      where: { id: req.params.id },
+      data: dataToUpdate
+    });
+    
+    res.json({ ...updatedOrder, _id: updatedOrder.id });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to update order", error: error.message });
+  }
+}
+
+// GET /api/orders/:id/track?phone=  (public - no auth, validates by phone)
+async function trackOrder(req, res) {
+  try {
+    const order = await prisma.order.findUnique({
+      where: { id: req.params.id },
+      include: { items: true }
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found. Please check your order ID." });
+    }
+
+    // Validate phone matches the shipping address to prevent enumeration
+    const phone = (order.shippingAddress?.phone || "").replace(/\s/g, "");
+    const queryPhone = (req.query.phone || "").replace(/\s/g, "");
+
+    if (!queryPhone || phone !== queryPhone) {
+      return res.status(403).json({ message: "Phone number does not match this order." });
+    }
+
+    res.json({ ...order, _id: order.id });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to track order", error: err.message });
+  }
+}
+
+module.exports = { createOrder, getMyOrders, getOrderById, getOrders, updateOrderStatus, trackOrder };

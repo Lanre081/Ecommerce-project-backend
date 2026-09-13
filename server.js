@@ -2,13 +2,10 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const connectDB = require("./config/db");
 
 const authRoutes = require("./routes/authRoutes");
 const productRoutes = require("./routes/productRoutes");
 const orderRoutes = require("./routes/orderRoutes");
-
-connectDB();
 
 const app = express();
 
@@ -19,12 +16,14 @@ app.use(express.json()); // parses JSON request bodies into req.body
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/categories", require("./routes/categoryRoutes"));
+app.use("/api/admin", require("./routes/adminRoutes"));
+app.use("/api/reviews", require("./routes/reviewRoutes"));
+app.use("/api/resellers", require("./routes/resellerRoutes"));
+app.use("/api/delivery-regions", require("./routes/deliveryRegionRoutes"));
 
-// Serve the plain HTML/CSS/JS frontend as static files.
-// This means running one server gives you both the API and the site -
-// simplest setup for a project this size (no separate frontend server / CORS
-// headaches during development).
-app.use(express.static(path.join(__dirname, "..", "frontend")));
+// Serve the built React frontend as static files.
+app.use(express.static(path.join(__dirname, "..", "frontend-react", "dist")));
 
 // Basic health check - useful for confirming the server is alive
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));

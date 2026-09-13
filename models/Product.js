@@ -16,22 +16,61 @@ const productSchema = new mongoose.Schema(
       required: [true, "Price is required"],
       min: [0, "Price cannot be negative"],
     },
-    category: {
-      type: String,
-      default: "general",
+    discountPrice: {
+      type: Number,
+      validate: {
+        validator: function (val) {
+          return val < this.price;
+        },
+        message: "Discount price ({VALUE}) should be below regular price",
+      },
     },
-    image: {
-      // For this project, just a URL string. In a real app you'd handle
-      // file uploads (e.g. multer + cloud storage), but that's a separate
-      // concern worth learning on its own.
-      type: String,
-      default: "https://via.placeholder.com/300",
+    category: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Category",
+      required: true,
+    },
+    images: {
+      type: [String],
+      default: ["https://via.placeholder.com/300"],
     },
     stock: {
       type: Number,
       required: true,
       default: 0,
       min: [0, "Stock cannot be negative"],
+    },
+    variants: [
+      {
+        name: String, // e.g., "Size", "Color"
+        options: [String], // e.g., ["S", "M", "L"]
+      },
+    ],
+    freeGifts: [
+      {
+        name: String,
+        description: String,
+        quantity: { type: Number, default: 1 },
+      },
+    ],
+    isPODEligible: {
+      type: Boolean,
+      default: true,
+    },
+    ratingsAverage: {
+      type: Number,
+      default: 0,
+      min: [0, "Rating must be above 0"],
+      max: [5, "Rating must be below 5.0"],
+      set: (val) => Math.round(val * 10) / 10,
+    },
+    ratingsQuantity: {
+      type: Number,
+      default: 0,
+    },
+    isFeatured: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }

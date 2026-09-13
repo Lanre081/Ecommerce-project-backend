@@ -1,12 +1,19 @@
 const express = require("express");
 const router = express.Router();
-const { createOrder, getMyOrders, getOrderById } = require("../controllers/orderController");
-const { protect } = require("../middleware/auth");
+const { createOrder, getMyOrders, getOrderById, getOrders, updateOrderStatus, trackOrder } = require("../controllers/orderController");
+const { protect, adminOnly } = require("../middleware/auth");
 
-// Every order route requires login - you can't place or view orders
-// without being authenticated.
-router.post("/", protect, createOrder);
+router.route("/")
+  .post(protect, createOrder)
+  .get(protect, adminOnly, getOrders);
+
 router.get("/my", protect, getMyOrders);
-router.get("/:id", protect, getOrderById);
+
+// Public track route - must be before /:id to avoid conflict
+router.get("/:id/track", trackOrder);
+
+router.route("/:id")
+  .get(protect, getOrderById)
+  .put(protect, adminOnly, updateOrderStatus);
 
 module.exports = router;
